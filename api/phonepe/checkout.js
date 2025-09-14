@@ -1,4 +1,4 @@
-// PhonePe Standard Checkout - Create Payment Session (Sandbox)
+// PhonePe Standard Checkout - Create Payment Session (Supports both Sandbox and Production)
 // Docs: https://developer.phonepe.com/payment-gateway/website-integration/standard-checkout/api-integration/api-integration-website
 
 export default async function handler(req, res) {
@@ -21,6 +21,7 @@ export default async function handler(req, res) {
       PHONEPE_CLIENT_ID,
       PHONEPE_CLIENT_SECRET,
       PHONEPE_CLIENT_VERSION = '1.0',
+      PHONEPE_ENVIRONMENT = 'sandbox', // 'sandbox' or 'production'
       FRONTEND_URL = 'https://aimemojis.com',
     } = process.env;
 
@@ -36,11 +37,25 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Amount in paise (INR) for sandbox
-    const amountPaise = plan === 'monthly' ? 99900 : 499900; // 999.00 or 4,999.00 INR
+    // Determine API endpoints based on environment
+    const isProduction = PHONEPE_ENVIRONMENT === 'production';
+    const baseUrl = isProduction 
+      ? 'https://api.phonepe.com/apis/pg/v1' 
+      : 'https://api-preprod.phonepe.com/apis/pgsandbox/pg/v1';
+
+    console.log(`🔧 PhonePe Environment: ${PHONEPE_ENVIRONMENT}`);
+    console.log(`🔧 Base URL: ${baseUrl}`);
+    console.log(`🔧 Client ID: ${PHONEPE_CLIENT_ID}`);
+    console.log(`🔧 Client Secret Length: ${PHONEPE_CLIENT_SECRET ? PHONEPE_CLIENT_SECRET.length : 0}`);
+    console.log(`🔧 Client Version: ${PHONEPE_CLIENT_VERSION}`);
+
+    // Amount in paise (INR) - use real amounts for production, test amounts for sandbox
+    const amountPaise = isProduction 
+      ? (plan === 'monthly' ? 99900 : 999900) // Real amounts: ₹999 or ₹9999
+      : (plan === 'monthly' ? 99900 : 499900); // Test amounts: ₹999 or ₹4999
 
     // 1) Get OAuth token - FIXED FORMAT
-    const authUrl = 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token';
+    const authUrl = `${baseUrl}/oauth/token`;
     const authResp = await fetch(authUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -57,13 +72,24 @@ export default async function handler(req, res) {
       console.error('PhonePe Auth Error:', {
         status: authResp.status,
         statusText: authResp.statusText,
-        response: authJson
+        response: authJson,
+        url: authUrl,
+        clientId: PHONEPE_CLIENT_ID,
+        environment: PHONEPE_ENVIRONMENT,
+        baseUrl: baseUrl,
       });
-      res.status(502).json({ 
+      res.status(400).json({ 
         error: 'PhonePe auth failed', 
         details: authJson,
         status: authResp.status,
-        statusText: authResp.statusText
+        statusText: authResp.statusText,
+        debug: {
+          environment: PHONEPE_ENVIRONMENT,
+          baseUrl: baseUrl,
+          hasClientId: !!PHONEPE_CLIENT_ID,
+          hasClientSecret: !!PHONEPE_CLIENT_SECRET,
+          clientVersion: PHONEPE_CLIENT_VERSION,
+        }
       });
       return;
     }
@@ -75,7 +101,7 @@ export default async function handler(req, res) {
     const returnUrl = `${FRONTEND_URL}/?purchase=success&provider=phonepe&plan=${encodeURIComponent(plan)}&orderId=${encodeURIComponent(orderId)}`;
     const cancelUrl = `${FRONTEND_URL}/?purchase=cancel&provider=phonepe&plan=${encodeURIComponent(plan)}&orderId=${encodeURIComponent(orderId)}`;
 
-    const payUrl = 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/pay';
+    const payUrl = `${baseUrl}/pay`;
     const payPayload = {
       merchantId: PHONEPE_CLIENT_ID,
       merchantTransactionId: orderId,

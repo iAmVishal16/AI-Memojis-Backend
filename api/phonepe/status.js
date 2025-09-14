@@ -24,7 +24,7 @@ export default async function handler(req, res) {
 		const { data, error } = await supabase
 			.from('entitlements')
 			.select('plan')
-			.eq('web_user_id', userId)
+			.eq('figma_user_id', userId)
 			.single();
 		if (error && error.code !== 'PGRST116') return res.status(500).json({ error: { message: error.message } });
 		if (!data) return res.status(200).json({ ok: false });

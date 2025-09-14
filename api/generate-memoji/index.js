@@ -1,5 +1,5 @@
-const { OpenAI } = require('openai');
-const crypto = require('crypto');
+import { OpenAI } from 'openai';
+import crypto from 'crypto';
 
 // Initialize OpenAI client
 const openai = new OpenAI({

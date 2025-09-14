@@ -1,7 +1,7 @@
 // Test PhonePe Authorization API
 // Run with: node test-phonepe-auth.js
 
-const fetch = require('node-fetch');
+import fetch from 'node-fetch';
 
 async function testPhonePeAuth() {
   const PHONEPE_CLIENT_ID = process.env.PHONEPE_CLIENT_ID;

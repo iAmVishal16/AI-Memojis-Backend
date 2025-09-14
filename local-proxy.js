@@ -41,10 +41,10 @@ async function proxyRequest(req, res, path) {
   }
 }
 
-// PhonePe endpoints - Mock for testing
+// PhonePe endpoints - Proxy to real PhonePe API
 app.options('/api/phonepe/checkout', (req, res) => res.status(200).end());
 app.get('/api/phonepe/checkout', (req, res) => {
-  res.status(200).json({ ok: true, message: 'PhonePe checkout expects POST. This is a mock GET responder.' });
+  res.status(200).json({ ok: true, message: 'PhonePe checkout expects POST. This is a proxy GET responder.' });
 });
 app.post('/api/phonepe/checkout', (req, res) => {
   console.log('PhonePe checkout request:', req.body);
@@ -53,24 +53,143 @@ app.post('/api/phonepe/checkout', (req, res) => {
     return res.status(400).json({ error: 'userId is required' });
   }
   const orderId = `test-${Date.now()}`;
-  // Mock: immediately "approve" and redirect back to app's returnUrl
-  const fallbackReturn = `${req.headers.origin || 'http://localhost:8081'}/?purchase=success&provider=phonepe&plan=${encodeURIComponent(plan || 'lifetime')}&orderId=${encodeURIComponent(orderId)}`;
-  const redirectUrl = returnUrl || fallbackReturn;
-  res.json({ ok: true, redirectUrl, orderId });
+  // Mock: return a mock PhonePe payment page URL for testing
+  const mockPaymentUrl = `http://localhost:${PORT}/mock-phonepe-payment?orderId=${orderId}&plan=${encodeURIComponent(plan || 'lifetime')}&returnUrl=${encodeURIComponent(returnUrl)}&cancelUrl=${encodeURIComponent(cancelUrl)}`;
+  res.json({ ok: true, redirectUrl: mockPaymentUrl, orderId });
 });
 
 app.options('/api/phonepe/webhook', (req, res) => res.status(200).end());
 app.post('/api/phonepe/webhook', (req, res) => {
   console.log('PhonePe webhook:', req.body);
-  res.json({ ok: true });
+  // Proxy to the real PhonePe webhook API
+  proxyRequest(req, res, '/api/phonepe/webhook');
 });
 
 app.get('/api/phonepe/status', (req, res) => {
   const { userId } = req.query;
   console.log('PhonePe status check for:', userId);
-  // Mock: return false for now (no entitlement)
-  res.json({ ok: false });
+  // Proxy to the real PhonePe status API
+  proxyRequest(req, res, '/api/phonepe/status');
 });
+
+// Mock PhonePe Payment Page (for testing until real credentials are set up)
+app.get('/mock-phonepe-payment', (req, res) => {
+  const { orderId, plan, returnUrl, cancelUrl } = req.query;
+  
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhonePe Payment Gateway</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        }
+        .payment-container { 
+            background: white; border-radius: 20px; padding: 40px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1); max-width: 400px; width: 90%;
+        }
+        .phonepe-logo { 
+            text-align: center; margin-bottom: 30px;
+        }
+        .phonepe-logo h1 { 
+            color: #5f259f; font-size: 28px; margin: 0; font-weight: bold;
+        }
+        .payment-details { 
+            background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 30px;
+        }
+        .detail-row { 
+            display: flex; justify-content: space-between; margin-bottom: 10px;
+        }
+        .detail-row:last-child { margin-bottom: 0; font-weight: bold; font-size: 18px; }
+        .buttons { 
+            display: flex; gap: 15px; margin-top: 20px;
+        }
+        .btn { 
+            flex: 1; padding: 15px; border: none; border-radius: 10px; 
+            font-size: 16px; font-weight: bold; cursor: pointer; transition: all 0.3s;
+        }
+        .btn-success { 
+            background: #28a745; color: white;
+        }
+        .btn-success:hover { 
+            background: #218838; transform: translateY(-2px);
+        }
+        .btn-danger { 
+            background: #dc3545; color: white;
+        }
+        .btn-danger:hover { 
+            background: #c82333; transform: translateY(-2px);
+        }
+        .status { 
+            text-align: center; margin-bottom: 20px; padding: 15px; 
+            background: #e3f2fd; border-radius: 10px; color: #1976d2;
+        }
+    </style>
+</head>
+<body>
+    <div class="payment-container">
+        <div class="phonepe-logo">
+            <h1>PhonePe</h1>
+        </div>
+        
+        <div class="status">
+            🧪 <strong>Mock Payment Gateway</strong><br>
+            <small>Real PhonePe requires proper test credentials</small>
+        </div>
+        
+        <div class="payment-details">
+            <div class="detail-row">
+                <span>Order ID:</span>
+                <span>${orderId}</span>
+            </div>
+            <div class="detail-row">
+                <span>Plan:</span>
+                <span>${plan}</span>
+            </div>
+            <div class="detail-row">
+                <span>Amount:</span>
+                <span>$${plan === 'monthly' ? '9.99' : '99.99'}</span>
+            </div>
+        </div>
+        
+        <div class="buttons">
+            <button class="btn btn-success" onclick="processPayment('success')">
+                ✅ Pay Now
+            </button>
+            <button class="btn btn-danger" onclick="processPayment('cancel')">
+                ❌ Cancel
+            </button>
+        </div>
+    </div>
+
+    <script>
+        function processPayment(action) {
+            const returnUrl = action === 'success' ? '${returnUrl}' : '${cancelUrl}';
+            
+            // Add a small delay to simulate payment processing
+            setTimeout(() => {
+                window.location.href = returnUrl;
+            }, 1000);
+        }
+        
+        // Auto-redirect after 30 seconds for testing
+        setTimeout(() => {
+            if (confirm('Auto-processing payment for testing. Continue?')) {
+                processPayment('success');
+            }
+        }, 30000);
+    </script>
+</body>
+</html>`;
+  
+  res.send(html);
+});
+
 
 // Generate Memoji - Mock endpoint for testing (HMAC signature issue needs debugging)
 app.options('/api/generate-memoji', (req, res) => res.status(200).end());

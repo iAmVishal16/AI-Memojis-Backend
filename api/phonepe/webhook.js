@@ -14,9 +14,25 @@ function getSupabase() {
 export default async function handler(req, res) {
 	res.setHeader('Access-Control-Allow-Origin', '*');
 	res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-	res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-VERIFY');
+	res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-VERIFY, Authorization');
 	if (req.method === 'OPTIONS') return res.status(200).end();
 	if (req.method !== 'POST') return res.status(405).json({ error: { message: 'Method not allowed' } });
+
+	// Basic Authentication for PhonePe webhook
+	const authHeader = req.headers.authorization;
+	if (!authHeader || !authHeader.startsWith('Basic ')) {
+		return res.status(401).json({ error: { message: 'Authentication required' } });
+	}
+
+	const credentials = Buffer.from(authHeader.slice(6), 'base64').toString();
+	const [username, password] = credentials.split(':');
+	
+	const expectedUsername = process.env.PHONEPE_WEBHOOK_USERNAME || 'phonepe_webhook_user';
+	const expectedPassword = process.env.PHONEPE_WEBHOOK_PASSWORD || 'Rule2701';
+	
+	if (username !== expectedUsername || password !== expectedPassword) {
+		return res.status(401).json({ error: { message: 'Invalid credentials' } });
+	}
 
 	try {
 		const body = req.body || {};
@@ -38,17 +54,17 @@ export default async function handler(req, res) {
 		}
 
 		const supabase = getSupabase();
-		// Upsert entitlement for web_user_id
+		// Upsert entitlement for figma_user_id (using userId as figma_user_id for web users)
 		const { error } = await supabase
 			.from('entitlements')
 			.upsert(
 				{
-					web_user_id: userId,
+					figma_user_id: userId,
 					plan: plan === 'monthly' ? 'subscription' : 'lifetime',
-					provider: 'phonepe',
-					transaction_id: merchantTransactionId || null
+					expiry: plan === 'monthly' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+					updated_at: new Date().toISOString()
 				},
-				{ onConflict: 'web_user_id' }
+				{ onConflict: 'figma_user_id' }
 			);
 		if (error) {
 			return res.status(500).json({ error: { message: error.message } });
