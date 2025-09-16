@@ -8,6 +8,14 @@ const openai = new OpenAI({
 
 // Rate limiting store (in-memory for simplicity, use Redis in production)
 const rateLimitStore = new Map();
+// V1: simple monthly credit ledger (in-memory). For production use a DB/Redis.
+const creditLedger = new Map(); // key: userId => { monthKey, credits, plan }
+const PLAN_CREDITS = {
+  monthly_basic: 100,
+  monthly_standard: 300,
+  monthly_pro: 1000,
+  monthly: 100 // fallback if client only says 'monthly'
+};
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 10; // 10 requests per minute per IP
 const RATE_LIMIT_BURST = 5; // Allow 5 burst requests
@@ -184,7 +192,38 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: { message: validationResult.error } });
   }
 
-  const { prompt, size, background, model } = req.body;
+  const { prompt, size, background, model, userId, subscriptionTier } = req.body;
+
+  // Enforce credits before generation (best-effort in-memory)
+  if (userId && subscriptionTier) {
+    try {
+      const now = new Date();
+      const monthKey = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+      const planKey = ['monthly_basic', 'monthly_standard', 'monthly_pro'].includes(String(subscriptionTier))
+        ? String(subscriptionTier)
+        : 'monthly';
+      const grant = PLAN_CREDITS[planKey] || PLAN_CREDITS.monthly;
+
+      let entry = creditLedger.get(userId);
+      if (!entry || entry.monthKey !== monthKey) {
+        entry = { monthKey, credits: grant, plan: planKey };
+      }
+
+      if (entry.credits <= 0) {
+        return res.status(402).json({
+          error: { code: 'OUT_OF_CREDITS', message: 'You are out of credits. Please wait for monthly renewal.' },
+          remaining: 0
+        });
+      }
+
+      // Debit 1 credit per generation
+      entry.credits -= 1;
+      creditLedger.set(userId, entry);
+      res.setHeader('X-Credits-Remaining', String(entry.credits));
+    } catch (e) {
+      console.warn('Credit enforcement error', e);
+    }
+  }
 
   // Structured logging
   console.log('Request details:', {
