@@ -99,10 +99,12 @@ function checkRateLimit(ip) {
 }
 
 function validateRequestBody(body) {
-  const { prompt, size, background, model } = body;
+  const { prompt, size, background, model, familyType, gesture, hair, skinTone } = body;
 
-  if (!prompt || typeof prompt !== 'string') {
-    return { valid: false, error: 'Prompt is required and must be a string.' };
+  // Allow either a direct prompt or compact option IDs that we will rebuild server-side
+  const hasCompact = familyType || gesture || hair || skinTone || Array.isArray(body.accessories) || body.colorTheme;
+  if ((!prompt || typeof prompt !== 'string') && !hasCompact) {
+    return { valid: false, error: 'Either prompt or compact option IDs are required.' };
   }
 
   if (prompt.length > 1000) {
@@ -156,6 +158,23 @@ export default async function handler(req, res) {
   if (!authResult.valid) {
     console.warn(`Authentication failed for IP: ${clientIP}, Error: ${authResult.error}`);
     return res.status(401).json({ error: { message: 'Unauthorized' } });
+  }
+
+  // If prompt not provided, rebuild from compact IDs server-side
+  if (!req.body.prompt) {
+    try {
+      const { familyType, gesture, hair, skinTone, accessories, colorTheme, background } = req.body || {};
+      const ft = (familyType || 'father');
+      const g = (gesture || 'wave').replace(/_/g, '-');
+      const h = (hair || 'short');
+      const skin = (skinTone || 'light');
+      const acc = Array.isArray(accessories) && accessories.length ? `wearing ${accessories[0]}` : '';
+      const clothing = colorTheme === 'warm-pink' ? 'soft pastel sweater' : 'casual pastel shirt';
+      const bg = (background === 'transparent' || colorTheme === 'transparent') ? '' : 'Pastel circular background.';
+      req.body.prompt = `A premium 3D Memoji-style avatar of a ${ft} with ${h} and ${skin} skin tone. Include head, shoulders, and hands with a ${g} gesture. ${clothing}. ${acc}. ${bg} Soft rounded shapes, glossy textures, minimal modern style. Cheerful happy face with warm eyes.`.trim();
+    } catch (e) {
+      console.warn('Failed to rebuild prompt from compact IDs', e);
+    }
   }
 
   // Validate request body
