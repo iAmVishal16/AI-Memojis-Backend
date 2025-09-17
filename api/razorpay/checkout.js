@@ -19,11 +19,15 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   try {
-    const {
-      RAZORPAY_KEY_ID,
-      RAZORPAY_KEY_SECRET,
-      PAYMENT_PROVIDER = 'razorpay'
+    let {
+      RAZORPAY_KEY_ID: RAW_KEY_ID,
+      RAZORPAY_KEY_SECRET: RAW_KEY_SECRET,
+      PAYMENT_PROVIDER: RAW_PROVIDER = 'razorpay'
     } = process.env
+
+    const RAZORPAY_KEY_ID = (RAW_KEY_ID || '').trim()
+    const RAZORPAY_KEY_SECRET = (RAW_KEY_SECRET || '').trim()
+    const PAYMENT_PROVIDER = (RAW_PROVIDER || 'razorpay').trim()
 
     // Accept Razorpay if explicitly enabled via env, or if keys are present, or if caller forces provider
     const forceProvider = (req.query?.provider || (typeof req.body === 'string' ? (JSON.parse(req.body || '{}')||{}).provider : (req.body||{}).provider) || '').toString().toLowerCase()
@@ -49,7 +53,7 @@ export default async function handler(req, res) {
     const amountPaise = Math.round(amountInr * 100)
 
     // Create Razorpay order
-    const basicAuth = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString('base64')
+    const basicAuth = Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`, 'utf8').toString('base64')
     const orderResp = await fetch('https://api.razorpay.com/v1/orders', {
       method: 'POST',
       headers: {
