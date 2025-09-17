@@ -218,8 +218,8 @@ export default async function handler(req, res) {
       // Continue without credit enforcement if database is down
     }
   }
-  // Anonymous / free-plan device guard: max 2 per device per month
-  if (!userId || !subscriptionTier || subscriptionTier === 'free') {
+  // Anonymous device guard: max 2 per device per month (do NOT apply to signed-in users)
+  if (!userId) {
     try {
       const url = process.env.SUPABASE_URL;
       const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
