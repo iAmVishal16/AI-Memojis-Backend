@@ -44,11 +44,11 @@ export default async function handler(req, res) {
     const plan = body.plan || 'monthly_basic'
     if (!userId) return res.status(400).json({ error: 'userId is required' })
 
-    // TEMP: test pricing in INR (will be reverted after verification)
+    // Production pricing in INR
     const planAmountsInr = {
-      monthly_basic: 1,
-      monthly_standard: 2,
-      monthly_pro: 3
+      monthly_basic: 876.58,
+      monthly_standard: 1754.04,
+      monthly_pro: 4386.42
     }
     const amountInr = planAmountsInr[plan] || planAmountsInr.monthly_basic
     const amountPaise = Math.round(amountInr * 100)
