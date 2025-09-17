@@ -21,7 +21,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: { message: 'body object is required' } })
     }
     // Lightweight allow-list (optional): ensure only expected fields can be signed
-    const allowedKeys = ['model','size','background','prompt','familyType','gesture','hair','skinTone','accessories','colorTheme','userId','subscriptionTier']
+    const allowedKeys = ['model','size','background','prompt','familyType','gesture','hair','skinTone','accessories','colorTheme','userId','subscriptionTier','deviceId']
     const sanitized = {}
     for (const k of Object.keys(body)) {
       if (allowedKeys.includes(k)) sanitized[k] = body[k]
