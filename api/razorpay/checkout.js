@@ -80,7 +80,13 @@ export default async function handler(req, res) {
         error: 'Failed to create Razorpay order',
         details: orderJson,
         status: orderResp.status,
-        statusText: orderResp.statusText
+        statusText: orderResp.statusText,
+        debug: {
+          provider: (PAYMENT_PROVIDER || '').toString(),
+          keyIdPrefix: (RAZORPAY_KEY_ID || '').slice(0, 8),
+          hasKeyId: !!RAZORPAY_KEY_ID,
+          hasSecret: !!RAZORPAY_KEY_SECRET
+        }
       })
     }
 
