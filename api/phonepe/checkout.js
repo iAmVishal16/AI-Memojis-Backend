@@ -31,61 +31,87 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const { userId, plan = 'lifetime' } = body;
+    const { userId, plan = 'monthly_basic', amount } = body;
     if (!userId) {
       res.status(400).json({ error: 'userId is required' });
       return;
     }
 
+    // Map plan to pricing
+    const planPricing = {
+      'monthly_basic': { price: 9.99, credits: 100 },
+      'monthly_standard': { price: 19.99, credits: 300 },
+      'monthly_pro': { price: 49.99, credits: 1000 }
+    };
+
+    const selectedPlan = planPricing[plan] || planPricing['monthly_basic'];
+    const amountInRupees = amount || selectedPlan.price;
+
     // Determine API endpoints based on environment
     const isProduction = PHONEPE_ENVIRONMENT === 'production';
-    const baseUrl = isProduction 
-      ? 'https://api.phonepe.com/apis/pg/v1' 
-      : 'https://api-preprod.phonepe.com/apis/pgsandbox/pg/v1';
+    // In V2, OAuth lives at the API root, while pay/status live under /pg/v1
+    const apiRoot = isProduction 
+      ? 'https://api.phonepe.com/apis' 
+      : 'https://api-preprod.phonepe.com/apis/pg-sandbox';
 
     console.log(`🔧 PhonePe Environment: ${PHONEPE_ENVIRONMENT}`);
-    console.log(`🔧 Base URL: ${baseUrl}`);
+    console.log(`🔧 API Root: ${apiRoot}`);
     console.log(`🔧 Client ID: ${PHONEPE_CLIENT_ID}`);
     console.log(`🔧 Client Secret Length: ${PHONEPE_CLIENT_SECRET ? PHONEPE_CLIENT_SECRET.length : 0}`);
     console.log(`🔧 Client Version: ${PHONEPE_CLIENT_VERSION}`);
 
-    // Amount in paise (INR) - use real amounts for production, test amounts for sandbox
-    const amountPaise = isProduction 
-      ? (plan === 'monthly' ? 99900 : 999900) // Real amounts: ₹999 or ₹9999
-      : (plan === 'monthly' ? 99900 : 499900); // Test amounts: ₹999 or ₹4999
+    // Amount in paise (INR) - convert from USD to INR for PhonePe
+    const usdToInrRate = 83; // Approximate USD to INR rate
+    const amountInRupees = selectedPlan.price * usdToInrRate;
+    const amountPaise = Math.round(amountInRupees * 100);
 
-    // 1) Get OAuth token - FIXED FORMAT
-    const authUrl = `${baseUrl}/oauth/token`;
-    const authResp = await fetch(authUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: PHONEPE_CLIENT_ID,
-        client_version: PHONEPE_CLIENT_VERSION,
-        client_secret: PHONEPE_CLIENT_SECRET,
-        grant_type: 'client_credentials',
-      })
-    });
-
-    const authJson = await authResp.json().catch(() => ({}));
-    if (!authResp.ok || !authJson?.access_token) {
-      console.error('PhonePe Auth Error:', {
-        status: authResp.status,
-        statusText: authResp.statusText,
-        response: authJson,
-        url: authUrl,
-        clientId: PHONEPE_CLIENT_ID,
-        environment: PHONEPE_ENVIRONMENT,
-        baseUrl: baseUrl,
-      });
-      res.status(400).json({ 
-        error: 'PhonePe auth failed', 
-        details: authJson,
-        status: authResp.status,
-        statusText: authResp.statusText,
+    // 1) Get OAuth token - try multiple V2-compatible paths to avoid mapping issues
+    const authCandidates = (
+      PHONEPE_ENVIRONMENT === 'sandbox'
+        ? ['https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token']
+        : ['https://api.phonepe.com/apis/pg/v1/oauth/token']
+    );
+    let accessToken = null;
+    let lastAuthError = null;
+    let triedUrls = [];
+    for (const candidate of authCandidates) {
+      triedUrls.push(candidate);
+      try {
+        // Try both snake_case and camelCase parameter formats
+        const authBodies = [
+          `client_id=${encodeURIComponent(PHONEPE_CLIENT_ID)}&client_version=${encodeURIComponent(PHONEPE_CLIENT_VERSION)}&client_secret=${encodeURIComponent(PHONEPE_CLIENT_SECRET)}&grant_type=client_credentials`,
+        ];
+        for (const body of authBodies) {
+          const bodyString = typeof body === 'string' ? body : body.toString();
+          const resp = await fetch(candidate, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: bodyString
+          });
+          const json = await resp.json().catch(() => ({}));
+          if (resp.ok && json?.access_token) {
+            accessToken = json.access_token;
+            console.log(`✅ PhonePe Auth succeeded at: ${candidate}`);
+            break;
+          } else {
+            lastAuthError = { status: resp.status, statusText: resp.statusText, response: json, url: candidate };
+            console.warn('Auth attempt failed:', lastAuthError);
+          }
+        }
+        if (accessToken) break;
+      } catch (e) {
+        lastAuthError = { error: e?.message || String(e), url: candidate };
+        console.warn('Auth attempt threw:', lastAuthError);
+      }
+    }
+    if (!accessToken) {
+      res.status(400).json({
+        error: 'PhonePe auth failed',
+        details: lastAuthError,
+        triedUrls,
         debug: {
           environment: PHONEPE_ENVIRONMENT,
-          baseUrl: baseUrl,
+          apiRoot: apiRoot,
           hasClientId: !!PHONEPE_CLIENT_ID,
           hasClientSecret: !!PHONEPE_CLIENT_SECRET,
           clientVersion: PHONEPE_CLIENT_VERSION,
@@ -93,26 +119,28 @@ export default async function handler(req, res) {
       });
       return;
     }
-
-    const accessToken = authJson.access_token;
+    
 
     // 2) Create payment (Standard Checkout) - FIXED PAYLOAD
     const orderId = `aim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const returnUrl = `${FRONTEND_URL}/?purchase=success&provider=phonepe&plan=${encodeURIComponent(plan)}&orderId=${encodeURIComponent(orderId)}`;
-    const cancelUrl = `${FRONTEND_URL}/?purchase=cancel&provider=phonepe&plan=${encodeURIComponent(plan)}&orderId=${encodeURIComponent(orderId)}`;
 
-    const payUrl = `${baseUrl}/pay`;
+    // V2 Create Payment endpoint per docs:
+    // Sandbox: https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay
+    // Production: https://api.phonepe.com/apis/pg/checkout/v2/pay
+    const payBase = isProduction
+      ? 'https://api.phonepe.com/apis/pg'
+      : 'https://api-preprod.phonepe.com/apis/pg-sandbox';
+    const payUrl = `${payBase}/checkout/v2/pay`;
+
     const payPayload = {
-      merchantId: PHONEPE_CLIENT_ID,
-      merchantTransactionId: orderId,
-      merchantUserId: String(userId),
+      merchantOrderId: orderId,
       amount: amountPaise,
-      redirectUrl: returnUrl,
-      redirectMode: 'POST',
-      callbackUrl: `${FRONTEND_URL}/api/phonepe/webhook`,
-      mobileNumber: '9999999999', // Required for sandbox
-      paymentInstrument: {
-        type: 'PAY_PAGE'
+      paymentFlow: {
+        type: 'PG_CHECKOUT',
+        merchantUrls: {
+          redirectUrl: returnUrl
+        }
       }
     };
 
@@ -120,8 +148,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-        'X-VERIFY': 'sha256',
+        'Authorization': `O-Bearer ${accessToken}`
       },
       body: JSON.stringify(payPayload)
     });
@@ -142,7 +169,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    const redirectUrl = payJson?.data?.instrumentResponse?.redirectInfo?.url;
+    // V2 returns redirectUrl at the top level
+    const redirectUrl = payJson?.redirectUrl;
     if (!redirectUrl) {
       res.status(502).json({ error: 'No redirect URL from PhonePe', details: payJson });
       return;

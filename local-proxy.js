@@ -48,14 +48,8 @@ app.get('/api/phonepe/checkout', (req, res) => {
 });
 app.post('/api/phonepe/checkout', (req, res) => {
   console.log('PhonePe checkout request:', req.body);
-  const { userId, plan, returnUrl, cancelUrl } = req.body;
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
-  }
-  const orderId = `test-${Date.now()}`;
-  // Mock: return a mock PhonePe payment page URL for testing
-  const mockPaymentUrl = `http://localhost:${PORT}/mock-phonepe-payment?orderId=${orderId}&plan=${encodeURIComponent(plan || 'lifetime')}&returnUrl=${encodeURIComponent(returnUrl)}&cancelUrl=${encodeURIComponent(cancelUrl)}`;
-  res.json({ ok: true, redirectUrl: mockPaymentUrl, orderId });
+  // Proxy to the real PhonePe API instead of using mock
+  proxyRequest(req, res, '/api/phonepe/checkout');
 });
 
 app.options('/api/phonepe/webhook', (req, res) => res.status(200).end());
@@ -194,18 +188,25 @@ app.get('/mock-phonepe-payment', (req, res) => {
 // Generate Memoji - Mock endpoint for testing (HMAC signature issue needs debugging)
 app.options('/api/generate-memoji', (req, res) => res.status(200).end());
 app.post('/api/generate-memoji', (req, res) => {
-  console.log('Generate memoji request:', req.body);
-  
-  // Use the actual user prompt from the request
-  const userPrompt = req.body.prompt || 'default memoji';
-  console.log('User prompt:', userPrompt);
-  
+  // Build prompt server-side when compact IDs are provided
+  const { prompt, familyType, gesture, hair, skinTone, accessories, colorTheme } = req.body || {};
+  let effectivePrompt = prompt;
+  if (!prompt && (familyType || gesture || hair || skinTone || accessories || colorTheme)) {
+    const ft = (familyType || 'father');
+    const g = (gesture || 'wave').replace(/_/g, '-');
+    const h = (hair || 'short');
+    const skin = (skinTone || 'light');
+    const acc = Array.isArray(accessories) && accessories.length ? `wearing ${accessories[0]}` : '';
+    const clothing = colorTheme === 'warm-pink' ? 'soft pastel sweater' : 'casual pastel shirt';
+    const bg = colorTheme === 'transparent' ? '' : 'Pastel circular background.';
+    effectivePrompt = `A premium 3D Memoji-style avatar of a ${ft} with ${h} and ${skin} skin tone. Include head, shoulders, and hands with a ${g} gesture. ${clothing}. ${acc}. ${bg} Soft rounded shapes, glossy textures, minimal modern style. Cheerful happy face with warm eyes.`.trim();
+  }
   // Mock response with a sample base64 image
   const mockBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
   res.json({
-    data: [{
-      b64_json: mockBase64
-    }]
+    data: [{ b64_json: mockBase64 }],
+    // never echo prompt in production; local proxy returns it only if explicitly in dev
+    ...(process.env.NODE_ENV !== 'production' && effectivePrompt ? { debug_prompt: effectivePrompt } : {})
   });
 });
 

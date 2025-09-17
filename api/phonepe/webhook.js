@@ -3,6 +3,7 @@
 // This is a simplified sandbox-friendly handler. In production, verify X-VERIFY signature per PhonePe docs.
 
 import { createClient } from '@supabase/supabase-js';
+import { resetMonthlyCredits } from '../credits/index.js';
 
 function getSupabase() {
 	const url = process.env.SUPABASE_URL;
@@ -43,7 +44,7 @@ export default async function handler(req, res) {
 		const data = body.data || {};
 		const meta = data.metadata || body.metadata || {};
 		const userId = meta.userId || body.userId || data.userId;
-		const plan = meta.plan || body.plan || data.plan || 'lifetime';
+		const plan = meta.plan || body.plan || data.plan || 'monthly_basic';
 		const merchantTransactionId = data.merchantTransactionId || body.merchantTransactionId || '';
 
 		if (!status) {
@@ -54,20 +55,41 @@ export default async function handler(req, res) {
 		}
 
 		const supabase = getSupabase();
+		
+		// Map plan to subscription tier
+		const planMapping = {
+			'monthly_basic': 'monthly_basic',
+			'monthly_standard': 'monthly_standard', 
+			'monthly_pro': 'monthly_pro',
+			'monthly': 'monthly_basic', // fallback
+			'lifetime': 'lifetime'
+		};
+		const subscriptionTier = planMapping[plan] || 'monthly_basic';
+
 		// Upsert entitlement for figma_user_id (using userId as figma_user_id for web users)
 		const { error } = await supabase
 			.from('entitlements')
 			.upsert(
 				{
 					figma_user_id: userId,
-					plan: plan === 'monthly' ? 'subscription' : 'lifetime',
-					expiry: plan === 'monthly' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() : null,
+					plan: subscriptionTier,
+					expiry: subscriptionTier === 'lifetime' ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
 					updated_at: new Date().toISOString()
 				},
 				{ onConflict: 'figma_user_id' }
 			);
 		if (error) {
 			return res.status(500).json({ error: { message: error.message } });
+		}
+
+		// Reset monthly credits for the user
+		if (subscriptionTier !== 'lifetime') {
+			try {
+				await resetMonthlyCredits(userId, subscriptionTier);
+			} catch (creditError) {
+				console.warn('Failed to reset monthly credits:', creditError);
+				// Don't fail the webhook if credit reset fails
+			}
 		}
 
 		return res.status(200).json({ ok: true });
