@@ -25,7 +25,10 @@ export default async function handler(req, res) {
       PAYMENT_PROVIDER = 'razorpay'
     } = process.env
 
-    if (PAYMENT_PROVIDER !== 'razorpay') {
+    // Accept Razorpay if explicitly enabled via env, or if keys are present, or if caller forces provider
+    const forceProvider = (req.query?.provider || (typeof req.body === 'string' ? (JSON.parse(req.body || '{}')||{}).provider : (req.body||{}).provider) || '').toString().toLowerCase()
+    const providerEnabled = (PAYMENT_PROVIDER || '').toLowerCase() === 'razorpay' || (!!RAZORPAY_KEY_ID && !!RAZORPAY_KEY_SECRET) || forceProvider === 'razorpay'
+    if (!providerEnabled) {
       return res.status(400).json({ error: 'Razorpay provider is not enabled' })
     }
     if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
