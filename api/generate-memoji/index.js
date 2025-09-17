@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import crypto from 'crypto';
+import { createClient } from '@supabase/supabase-js';
 import { getUserCredits, debitCredit } from '../credits/index.js';
 
 // Initialize OpenAI client
@@ -186,6 +187,7 @@ export default async function handler(req, res) {
   }
 
   const { prompt, size, background, model, userId, subscriptionTier } = req.body;
+  const deviceId = (req.headers['x-device-id'] || req.body?.deviceId || '').toString().slice(0,128);
 
   // Enforce credits before generation (persistent storage)
   if (userId && subscriptionTier) {
@@ -214,6 +216,38 @@ export default async function handler(req, res) {
     } catch (e) {
       console.warn('Credit enforcement error', e);
       // Continue without credit enforcement if database is down
+    }
+  }
+  // Anonymous / free-plan device guard: max 2 per device per month
+  if (!userId || !subscriptionTier || subscriptionTier === 'free') {
+    try {
+      const url = process.env.SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      if (url && key && deviceId) {
+        const supabase = createClient(url, key, { auth: { persistSession: false } });
+        const monthKey = new Date().toISOString().slice(0,7);
+        const { data, error } = await supabase
+          .from('device_usage')
+          .select('used,current_month')
+          .eq('device_id', deviceId)
+          .maybeSingle();
+        if (error) throw error;
+        let used = 0; let current_month = monthKey;
+        if (!data) {
+          await supabase.from('device_usage').insert({ device_id: deviceId, current_month: monthKey, used: 1 });
+        } else {
+          used = data.used; current_month = data.current_month;
+          if (current_month !== monthKey) {
+            await supabase.from('device_usage').upsert({ device_id: deviceId, current_month: monthKey, used: 1 });
+          } else if (used >= 2) {
+            return res.status(402).json({ error: { message: 'OUT_OF_CREDITS: Free device limit reached (2/month). Sign in to continue.' } });
+          } else {
+            await supabase.from('device_usage').update({ used: used + 1, updated_at: new Date().toISOString() }).eq('device_id', deviceId);
+          }
+        }
+      }
+    } catch (e) {
+      // If tracking fails, do not block—but prefer to allow minimal friction
     }
   }
 
