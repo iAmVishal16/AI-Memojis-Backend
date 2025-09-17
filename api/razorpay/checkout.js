@@ -64,9 +64,24 @@ export default async function handler(req, res) {
         notes: { userId, plan }
       })
     })
-    const orderJson = await orderResp.json().catch(() => ({}))
+    // Read raw text then try to parse for better diagnostics
+    const rawText = await orderResp.text()
+    let orderJson = {}
+    try { orderJson = JSON.parse(rawText) } catch { orderJson = { raw: rawText } }
     if (!orderResp.ok || !orderJson?.id) {
-      return res.status(502).json({ error: 'Failed to create Razorpay order', details: orderJson })
+      console.error('Razorpay order error:', {
+        status: orderResp.status,
+        statusText: orderResp.statusText,
+        keyIdPrefix: (RAZORPAY_KEY_ID || '').slice(0, 8),
+        provider: PAYMENT_PROVIDER,
+        response: orderJson
+      })
+      return res.status(orderResp.status || 502).json({
+        error: 'Failed to create Razorpay order',
+        details: orderJson,
+        status: orderResp.status,
+        statusText: orderResp.statusText
+      })
     }
 
     const orderId = orderJson.id
