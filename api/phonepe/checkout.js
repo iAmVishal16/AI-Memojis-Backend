@@ -1,6 +1,15 @@
 // PhonePe Standard Checkout - Create Payment Session (Supports both Sandbox and Production)
 // Docs: https://developer.phonepe.com/payment-gateway/website-integration/standard-checkout/api-integration/api-integration-website
 
+import { createClient } from '@supabase/supabase-js';
+
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) throw new Error('Supabase env not configured');
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -143,6 +152,27 @@ export default async function handler(req, res) {
         }
       }
     };
+
+    // Persist order record for webhook reconciliation
+    try {
+      const supabase = getSupabase();
+      const { error: orderErr } = await supabase
+        .from('orders')
+        .upsert({
+          order_id: orderId,
+          user_id: userId,
+          plan: plan,
+          amount_rupees: Math.round((amountInRupees + Number.EPSILON) * 100) / 100,
+          status: 'created',
+          provider: 'phonepe',
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'order_id' });
+      if (orderErr) {
+        console.warn('Failed to persist order before checkout:', orderErr);
+      }
+    } catch (persistErr) {
+      console.warn('Order persistence error:', persistErr);
+    }
 
     const payResp = await fetch(payUrl, {
       method: 'POST',

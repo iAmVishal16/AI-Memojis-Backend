@@ -66,7 +66,33 @@ export default async function handler(req, res) {
 		};
 		const subscriptionTier = planMapping[plan] || 'monthly_basic';
 
-		// Upsert entitlement for figma_user_id (using userId as figma_user_id for web users)
+        // Update order as paid (idempotent)
+        try {
+            const { data: orderRow } = await supabase
+                .from('orders')
+                .select('*')
+                .eq('order_id', merchantTransactionId || data.merchantOrderId || data.orderId || '')
+                .maybeSingle();
+
+            const { error: orderUpdateErr } = await supabase
+                .from('orders')
+                .upsert({
+                    order_id: (merchantTransactionId || data.merchantOrderId || data.orderId || ''),
+                    user_id: userId,
+                    plan: plan,
+                    status: 'paid',
+                    provider: 'phonepe',
+                    raw_response: body,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'order_id' });
+            if (orderUpdateErr) {
+                console.warn('Order update failed in webhook:', orderUpdateErr);
+            }
+        } catch (orderPersistErr) {
+            console.warn('Order persistence exception in webhook:', orderPersistErr);
+        }
+
+        // Upsert entitlement for figma_user_id (using userId as figma_user_id for web users)
 		const { error } = await supabase
 			.from('entitlements')
 			.upsert(
