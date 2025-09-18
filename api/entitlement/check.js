@@ -35,15 +35,31 @@ export default async function handler(req, res) {
         const PLAN_TOTAL = { monthly_basic: 100, monthly_standard: 300, monthly_pro: 1000 };
 
         if (!data) {
-            // No entitlement → treat as free; return free status (per-user monthly count in user_credits)
+            // No entitlement → treat as free; ensure monthly row exists and return free status
             const uid = figmaUserId || userId;
+            const FREE_TOTAL = 2;
             const { data: ucFree } = await supabase
                 .from('user_credits')
                 .select('*')
                 .eq('user_id', uid)
                 .maybeSingle();
-            const FREE_TOTAL = 2;
-            const free_remaining = ucFree && ucFree.current_month === currentMonth && ucFree.tier === 'free' ? ucFree.credits_remaining : FREE_TOTAL;
+            if (!ucFree || ucFree.current_month !== currentMonth || ucFree.tier !== 'free') {
+                await supabase.from('user_credits').upsert({
+                    user_id: uid,
+                    current_month: currentMonth,
+                    credits_remaining: FREE_TOTAL,
+                    tier: 'free',
+                    updated_at: new Date().toISOString()
+                });
+            }
+            const { data: freshFree } = await supabase
+                .from('user_credits')
+                .select('*')
+                .eq('user_id', uid)
+                .single();
+            const free_remaining = freshFree && freshFree.tier === 'free' && freshFree.current_month === currentMonth
+              ? freshFree.credits_remaining
+              : FREE_TOTAL;
             return res.status(200).json({ ok: false, credits: { month: currentMonth, monthly_total: 0, remaining: 0, used: 0, free_total: FREE_TOTAL, free_remaining } });
         }
 
