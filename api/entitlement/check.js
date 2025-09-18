@@ -1,6 +1,6 @@
 // POST /api/entitlement/check
 // Input: { figmaUserId } or { userId }
-// Output: { ok: boolean, plan?: 'lifetime'|'subscription', expiry?: string }
+// Output: { ok: boolean, plan?: string, expiry?: string, credits?: { month, monthly_total, remaining, used, free_total, free_remaining } }
 
 import { createClient } from '@supabase/supabase-js';
 
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
 		const { figmaUserId, userId } = req.body || {};
 		if (!figmaUserId && !userId) return res.status(400).json({ error: { message: 'figmaUserId or userId is required' } });
 		const supabase = getSupabase();
-		let query = supabase
+        let query = supabase
 			.from('entitlements')
 			.select('plan, expiry');
 		if (figmaUserId) {
@@ -29,10 +29,40 @@ export default async function handler(req, res) {
 		} else if (userId) {
 			query = query.eq('web_user_id', userId);
 		}
-		const { data, error } = await query.single();
+        const { data, error } = await query.single();
 		if (error && error.code !== 'PGRST116') return res.status(500).json({ error: { message: error.message } });
-		if (!data) return res.status(200).json({ ok: false });
-		return res.status(200).json({ ok: true, plan: data.plan, expiry: data.expiry || null });
+        const currentMonth = new Date().toISOString().slice(0, 7);
+        const PLAN_TOTAL = { monthly_basic: 100, monthly_standard: 300, monthly_pro: 1000 };
+
+        if (!data) {
+            // No entitlement → treat as free; return free status (per-user monthly count in user_credits)
+            const uid = figmaUserId || userId;
+            const { data: ucFree } = await supabase
+                .from('user_credits')
+                .select('*')
+                .eq('user_id', uid)
+                .maybeSingle();
+            const FREE_TOTAL = 2;
+            const free_remaining = ucFree && ucFree.current_month === currentMonth && ucFree.tier === 'free' ? ucFree.credits_remaining : FREE_TOTAL;
+            return res.status(200).json({ ok: false, credits: { month: currentMonth, monthly_total: 0, remaining: 0, used: 0, free_total: FREE_TOTAL, free_remaining } });
+        }
+
+        // Entitlement present → return plan and credits (if monthly_*)
+        const plan = data.plan;
+        let credits = null;
+        if (PLAN_TOTAL[plan] != null) {
+            const uid = figmaUserId || userId;
+            const total = PLAN_TOTAL[plan];
+            const { data: uc } = await supabase
+                .from('user_credits')
+                .select('*')
+                .eq('user_id', uid)
+                .maybeSingle();
+            const remaining = uc && uc.current_month === currentMonth && uc.tier === plan ? uc.credits_remaining : total;
+            const used = total - remaining;
+            credits = { month: currentMonth, monthly_total: total, remaining, used, free_total: 2, free_remaining: 0 };
+        }
+        return res.status(200).json({ ok: true, plan: data.plan, expiry: data.expiry || null, credits });
 	} catch (e) {
 		return res.status(500).json({ error: { message: 'Internal error' } });
 	}
