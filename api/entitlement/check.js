@@ -60,7 +60,7 @@ export default async function handler(req, res) {
             const free_remaining = freshFree && freshFree.tier === 'free' && freshFree.current_month === currentMonth
               ? freshFree.credits_remaining
               : FREE_TOTAL;
-            return res.status(200).json({ ok: false, credits: { month: currentMonth, monthly_total: 0, remaining: 0, used: 0, free_total: FREE_TOTAL, free_remaining } });
+            return res.status(200).json({ ok: false, credits: { month: currentMonth, monthly_total: FREE_TOTAL, remaining: free_remaining, used: FREE_TOTAL - free_remaining, free_total: FREE_TOTAL, free_remaining } });
         }
 
         // Entitlement present → return plan and credits (if monthly_*)
