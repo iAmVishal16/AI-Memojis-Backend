@@ -24,6 +24,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    console.log('Feedback endpoint called with:', req.body);
     const { userId, rating, reviewComment } = req.body;
 
     // Validate required fields
@@ -36,11 +37,14 @@ export default async function handler(req, res) {
     }
 
     // Check if user already submitted feedback
+    console.log('Checking for existing feedback for user:', userId);
     const { data: existingFeedback, error: checkError } = await supabase
       .from('feedback')
       .select('id')
       .eq('user_id', userId)
       .single();
+
+    console.log('Existing feedback check result:', { existingFeedback, checkError });
 
     if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = no rows returned
       console.error('Error checking existing feedback:', checkError);
