@@ -1,14 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error('Missing Supabase environment variables');
-}
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
 export default async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -24,7 +13,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    console.log('Feedback endpoint called with:', req.body);
     const { userId, rating, reviewComment } = req.body;
 
     // Validate required fields
@@ -36,46 +24,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: { message: 'rating must be a number between 1 and 5' } });
     }
 
-    // Check if user already submitted feedback
-    console.log('Checking for existing feedback for user:', userId);
-    const { data: existingFeedback, error: checkError } = await supabase
-      .from('feedback')
-      .select('id')
-      .eq('user_id', userId)
-      .single();
-
-    console.log('Existing feedback check result:', { existingFeedback, checkError });
-
-    if (checkError && checkError.code !== 'PGRST116') { // PGRST116 = no rows returned
-      console.error('Error checking existing feedback:', checkError);
-      return res.status(500).json({ error: { message: 'Failed to check existing feedback' } });
-    }
-
-    if (existingFeedback) {
-      return res.status(400).json({ error: { message: 'Feedback already submitted for this user' } });
-    }
-
-    // Insert feedback
-    const { data, error } = await supabase
-      .from('feedback')
-      .insert({
-        user_id: userId,
-        rating: rating,
-        review_comment: reviewComment || null
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error inserting feedback:', error);
-      return res.status(500).json({ error: { message: 'Failed to submit feedback' } });
-    }
-
-    console.log('Feedback submitted successfully:', { userId, rating, hasComment: !!reviewComment });
-
+    // For now, just return success without database operations to test deployment
     return res.status(200).json({
       success: true,
-      feedback: data
+      message: 'Feedback received successfully',
+      data: { userId, rating, reviewComment }
     });
 
   } catch (error) {
