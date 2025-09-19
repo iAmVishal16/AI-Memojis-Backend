@@ -28,14 +28,14 @@ export default async function handler(req, res) {
 
     // Initialize Supabase client
     const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-    if (!supabaseUrl || !supabaseServiceKey) {
+    if (!supabaseUrl || !supabaseKey) {
       console.error('Missing Supabase environment variables');
       return res.status(500).json({ error: { message: 'Server configuration error' } });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } });
 
     // Check if user already submitted feedback
     const { data: existingFeedback, error: checkError } = await supabase
