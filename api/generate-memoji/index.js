@@ -2,6 +2,13 @@ import { OpenAI } from 'openai';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { getUserCredits, debitCredit } from '../credits/index.js';
+import { 
+  generatePromptHash, 
+  checkMemojiCache, 
+  storeInCache, 
+  updateCacheUsage,
+  uploadToStorage 
+} from '../cache/utils.js';
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -194,6 +201,46 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'Sign in required to generate memojis.' } });
   }
 
+  // Check cache first - before any credit enforcement
+  try {
+    const cacheConfig = {
+      model: model || 'gpt-image-1',
+      size: size || '1024x1024',
+      familyType: req.body.familyType || 'father',
+      gesture: req.body.gesture || 'wave',
+      hair: req.body.hair || 'short',
+      skinTone: req.body.skinTone || 'medium',
+      accessories: req.body.accessories || [],
+      colorTheme: req.body.colorTheme || 'pastel-blue',
+      background: background || 'auto'
+    };
+    
+    const promptHash = generatePromptHash(cacheConfig);
+    console.log('Checking cache for hash:', promptHash);
+    
+    const cachedMemoji = await checkMemojiCache(promptHash);
+    if (cachedMemoji) {
+      console.log('Cache hit! Returning cached memoji:', cachedMemoji.id);
+      
+      // Update usage statistics
+      await updateCacheUsage(promptHash);
+      
+      // Return cached result without consuming credits
+      return res.status(200).json({
+        success: true,
+        imageUrl: cachedMemoji.image_url,
+        cached: true,
+        costSaved: cachedMemoji.generation_cost,
+        cacheId: cachedMemoji.id
+      });
+    }
+    
+    console.log('Cache miss - proceeding with OpenAI generation');
+  } catch (cacheError) {
+    console.error('Cache check failed, proceeding with generation:', cacheError);
+    // Continue with normal generation if cache fails
+  }
+
   // Enforce credits before generation (persistent storage)
   if (userId && subscriptionTier) {
     try {
@@ -269,6 +316,39 @@ export default async function handler(req, res) {
     console.log('Generating image with model:', selectedModel, 'Parameters:', generationParams);
     
     const image = await openai.images.generate(generationParams);
+
+    // Store in cache for future use
+    try {
+      const cacheConfig = {
+        model: selectedModel,
+        size: size || '1024x1024',
+        familyType: req.body.familyType || 'father',
+        gesture: req.body.gesture || 'wave',
+        hair: req.body.hair || 'short',
+        skinTone: req.body.skinTone || 'medium',
+        accessories: req.body.accessories || [],
+        colorTheme: req.body.colorTheme || 'pastel-blue',
+        background: background || 'auto'
+      };
+      
+      const promptHash = generatePromptHash(cacheConfig);
+      
+      // Upload image to Supabase Storage
+      const imageUrl = await uploadToStorage(image.data[0].b64_json, promptHash);
+      
+      // Store in cache
+      await storeInCache({
+        promptHash,
+        imageUrl,
+        config: cacheConfig,
+        cost: 0.02 // Estimated cost per generation
+      });
+      
+      console.log('Memoji cached successfully:', promptHash);
+    } catch (cacheError) {
+      console.error('Failed to cache memoji:', cacheError);
+      // Continue with response even if caching fails
+    }
 
     // Add rate limit headers to successful response
     res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX_REQUESTS);
