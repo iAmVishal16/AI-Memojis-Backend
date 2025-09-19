@@ -18,7 +18,9 @@ export default async function handler(req, res) {
 	if (req.method === 'OPTIONS') return res.status(200).end();
 	if (req.method !== 'POST') return res.status(405).json({ error: { message: 'Method not allowed' } });
 	try {
+		console.log('Request body:', req.body);
 		const { figmaUserId, userId } = req.body || {};
+		console.log('Extracted figmaUserId:', figmaUserId, 'userId:', userId);
 		if (!figmaUserId && !userId) return res.status(400).json({ error: { message: 'figmaUserId or userId is required' } });
 		const supabase = getSupabase();
         let query = supabase
