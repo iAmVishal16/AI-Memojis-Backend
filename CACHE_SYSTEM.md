@@ -12,10 +12,13 @@ The memoji caching system reduces OpenAI API costs by storing generated memojis 
 
 ### Cache Flow
 1. **Request**: User generates memoji with specific configuration
-2. **Hash**: Generate SHA-256 hash of normalized configuration
-3. **Check**: Look up hash in `memoji_cache` table
-4. **Hit**: Return cached image URL (no credits consumed)
-5. **Miss**: Generate via OpenAI, store in cache, return result
+2. **Authentication**: Verify user is logged in
+3. **Credit Check**: Ensure user has sufficient credits
+4. **Credit Debit**: Consume 1 credit (regardless of cache hit/miss)
+5. **Hash**: Generate SHA-256 hash of normalized configuration
+6. **Check**: Look up hash in `memoji_cache` table
+7. **Hit**: Return cached image URL (credits already consumed)
+8. **Miss**: Generate via OpenAI, store in cache, return result
 
 ### Configuration Normalization
 ```javascript
@@ -46,12 +49,26 @@ const normalized = {
   - Delete entries older than 90 days with <2 uses
   - Archive entries with >100 uses
 
+## Security & Credit Enforcement
+
+### Credit Consumption
+- **Credits are ALWAYS consumed** regardless of cache hit/miss
+- **Prevents exploitation** of cached results
+- **Maintains fair usage** across all users
+- **Cache provides cost savings to business, not free usage to users**
+
+### Flow Security
+1. Authentication required before any generation
+2. Credit check and debit happens BEFORE cache lookup
+3. Cache hit returns result with `creditsConsumed: true`
+4. No way to bypass credit system via cache
+
 ## Expected Benefits
 
 ### Cost Savings
-- **60-80% reduction** in OpenAI API costs
-- **$0.02 saved** per cache hit
-- **Instant response** for duplicate prompts
+- **60-80% reduction** in OpenAI API costs (business benefit)
+- **$0.02 saved** per cache hit (reduced OpenAI usage)
+- **Instant response** for duplicate prompts (user experience)
 
 ### Performance
 - **Cache hit ratio**: Expected 40-60%

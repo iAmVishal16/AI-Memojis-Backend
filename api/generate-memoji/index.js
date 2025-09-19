@@ -201,7 +201,37 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'Sign in required to generate memojis.' } });
   }
 
-  // Check cache first - before any credit enforcement
+  // Enforce credits BEFORE cache check to prevent credit bypass
+  if (userId && subscriptionTier) {
+    try {
+      const userCredits = await getUserCredits(userId, subscriptionTier);
+      
+      if (userCredits.credits_remaining <= 0) {
+        return res.status(402).json({
+          error: { code: 'OUT_OF_CREDITS', message: 'You are out of credits. Please wait for monthly renewal.' },
+          remaining: 0
+        });
+      }
+
+      // Debit 1 credit per generation (regardless of cache hit/miss)
+      const debitSuccess = await debitCredit(userId, subscriptionTier);
+      if (!debitSuccess) {
+        return res.status(402).json({
+          error: { code: 'OUT_OF_CREDITS', message: 'Failed to debit credit. Please try again.' },
+          remaining: 0
+        });
+      }
+
+      // Get updated credits for response header
+      const updatedCredits = await getUserCredits(userId, subscriptionTier);
+      res.setHeader('X-Credits-Remaining', String(updatedCredits.credits_remaining));
+    } catch (e) {
+      console.warn('Credit enforcement error', e);
+      return res.status(500).json({ error: { message: 'Credit system error. Please try again.' } });
+    }
+  }
+
+  // Check cache AFTER credit enforcement
   try {
     const cacheConfig = {
       model: model || 'gpt-image-1',
@@ -225,13 +255,14 @@ export default async function handler(req, res) {
       // Update usage statistics
       await updateCacheUsage(promptHash);
       
-      // Return cached result without consuming credits
+      // Return cached result (credits already consumed)
       return res.status(200).json({
         success: true,
         imageUrl: cachedMemoji.image_url,
         cached: true,
         costSaved: cachedMemoji.generation_cost,
-        cacheId: cachedMemoji.id
+        cacheId: cachedMemoji.id,
+        creditsConsumed: true // Indicate credits were consumed
       });
     }
     
@@ -241,35 +272,7 @@ export default async function handler(req, res) {
     // Continue with normal generation if cache fails
   }
 
-  // Enforce credits before generation (persistent storage)
-  if (userId && subscriptionTier) {
-    try {
-      const userCredits = await getUserCredits(userId, subscriptionTier);
-      
-      if (userCredits.credits_remaining <= 0) {
-        return res.status(402).json({
-          error: { code: 'OUT_OF_CREDITS', message: 'You are out of credits. Please wait for monthly renewal.' },
-          remaining: 0
-        });
-      }
-
-      // Debit 1 credit per generation
-      const debitSuccess = await debitCredit(userId, subscriptionTier);
-      if (!debitSuccess) {
-        return res.status(402).json({
-          error: { code: 'OUT_OF_CREDITS', message: 'Failed to debit credit. Please try again.' },
-          remaining: 0
-        });
-      }
-
-      // Get updated credits for response header
-      const updatedCredits = await getUserCredits(userId, subscriptionTier);
-      res.setHeader('X-Credits-Remaining', String(updatedCredits.credits_remaining));
-    } catch (e) {
-      console.warn('Credit enforcement error', e);
-      // Continue without credit enforcement if database is down
-    }
-  }
+  // Credits already enforced above - proceed with generation
   // Remove anonymous device-based free path (auth is now required)
 
   // Structured logging
