@@ -600,12 +600,10 @@ export default async function handler(req, res) {
       generationParams.background = background || "auto";
       generationParams.output_format = "png";
       
-      // Include headshot as reference image if available
+      // Note: gpt-image-1 doesn't support reference images directly in the generate endpoint
+      // We rely on the enhanced prompt with detailed facial expression analysis for matching
       if (req.body.headshot) {
-        // The headshot is already in base64 format (without data URL prefix)
-        // For gpt-image-1, we can include it as input_image
-        generationParams.input_image = req.body.headshot;
-        console.log('Including headshot as reference image for gpt-image-1');
+        console.log('Using enhanced prompt with detailed facial expression analysis for headshot matching');
       }
     } else if (selectedModel === "dall-e-3") {
       generationParams.size = size || "1024x1024";
@@ -619,12 +617,10 @@ export default async function handler(req, res) {
       // The enhanced prompt with detailed analysis should help with matching
     }
 
-    // Log parameters (excluding full base64 image for cleaner logs)
-    const logParams = { ...generationParams };
-    if (logParams.input_image) {
-      logParams.input_image = `[base64 image, ${logParams.input_image.length} chars]`;
-    }
-    console.log('Generating image with model:', selectedModel, 'Parameters:', logParams);
+    console.log('Generating image with model:', selectedModel, 'Parameters:', {
+      ...generationParams,
+      prompt: generationParams.prompt?.substring(0, 200) + '...' // Truncate prompt in logs
+    });
     
     const image = await openai.images.generate(generationParams);
 
