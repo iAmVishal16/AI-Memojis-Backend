@@ -156,7 +156,8 @@ async function analyzeHeadshot(headshotBase64) {
           content: [
             {
               type: "text",
-              text: `Analyze this headshot photo and extract the following facial features in JSON format:
+              text: `Analyze this headshot photo in extreme detail and extract ALL facial features, expressions, and characteristics in JSON format. Pay special attention to facial expressions, emotions, and micro-expressions:
+
 {
   "estimatedAge": "number (e.g., 25, 35, 45)",
   "gender": "male or female",
@@ -169,10 +170,34 @@ async function analyzeHeadshot(headshotBase64) {
   "hasGlasses": true or false,
   "hasBeard": true or false,
   "hasMustache": true or false,
-  "ethnicity": "general description if identifiable"
+  "ethnicity": "general description if identifiable",
+  "facialExpression": {
+    "smileIntensity": "none, subtle, moderate, wide, or beaming",
+    "smileType": "closed-lip, open-lip, or teeth-showing",
+    "hasDimples": true or false,
+    "eyeExpression": "wide-open, slightly-closed, squinting, or relaxed",
+    "eyeShape": "almond, round, narrow, or other",
+    "eyebrowPosition": "raised, neutral, lowered, or furrowed",
+    "eyebrowShape": "straight, arched, curved, or thick",
+    "eyeCrinkles": true or false,
+    "lipCurvature": "upward, neutral, or downward",
+    "lipFullness": "thin, medium, or full"
+  },
+  "emotionalState": {
+    "primaryEmotion": "joyful, calm, energetic, serene, friendly, confident, or other",
+    "energyLevel": "low, moderate, or high",
+    "warmthLevel": "warm, neutral, or cool",
+    "expressionIntensity": "mild, moderate, or strong"
+  },
+  "facialDetails": {
+    "noseShape": "small, medium, large, narrow, or wide",
+    "cheekProminence": "high, medium, or low",
+    "jawline": "sharp, rounded, or soft",
+    "headPosition": "straight, tilted-left, tilted-right, or looking-up/down"
+  }
 }
 
-Be specific and accurate. If you cannot determine a feature, use "unknown" or a reasonable default.`
+Be extremely specific and accurate. Analyze the exact facial expression, emotion, and micro-details visible in the photo. If you cannot determine a feature, use "unknown" or a reasonable default based on what you can see.`
             },
             {
               type: "image_url",
@@ -184,7 +209,7 @@ Be specific and accurate. If you cannot determine a feature, use "unknown" or a 
         }
       ],
       response_format: { type: "json_object" },
-      max_tokens: 500
+      max_tokens: 1000
     });
 
     const analysisText = response.choices[0].message.content;
@@ -342,18 +367,105 @@ export default async function handler(req, res) {
       const clothing = colorTheme === 'warm-pink' ? 'soft pastel sweater' : 'casual pastel shirt';
       const bg = (background === 'transparent' || colorTheme === 'transparent') ? '' : 'Pastel circular background.';
       
-      // Enhance prompt with headshot analysis details if available
+      // Build enhanced prompt with detailed facial expression matching
       let promptEnhancement = '';
+      let expressionDetails = '';
+      let emotionalDetails = '';
+      
       if (headshotAnalysis) {
+        // Age and facial structure
         const ageDesc = headshotAnalysis.estimatedAge ? `approximately ${headshotAnalysis.estimatedAge} years old` : '';
         const facialDesc = headshotAnalysis.facialStructure ? `with a ${headshotAnalysis.facialStructure} face shape` : '';
         promptEnhancement = `${ageDesc} ${facialDesc}`.trim();
         if (promptEnhancement) {
           promptEnhancement = `, ${promptEnhancement}`;
         }
+        
+        // Detailed facial expression description
+        if (headshotAnalysis.facialExpression) {
+          const expr = headshotAnalysis.facialExpression;
+          const expressionParts = [];
+          
+          // Smile description
+          if (expr.smileIntensity && expr.smileIntensity !== 'none') {
+            let smileDesc = '';
+            if (expr.smileIntensity === 'beaming' || expr.smileIntensity === 'wide') {
+              smileDesc = `a ${expr.smileIntensity} smile`;
+            } else if (expr.smileIntensity === 'moderate') {
+              smileDesc = `a warm, ${expr.smileIntensity} smile`;
+            } else {
+              smileDesc = `a ${expr.smileIntensity} smile`;
+            }
+            
+            if (expr.hasDimples) {
+              smileDesc += ' with visible dimples';
+            }
+            if (expr.smileType === 'teeth-showing') {
+              smileDesc += ' showing teeth';
+            }
+            expressionParts.push(smileDesc);
+          }
+          
+          // Eye description
+          if (expr.eyeExpression) {
+            let eyeDesc = '';
+            if (expr.eyeExpression === 'wide-open') {
+              eyeDesc = 'bright, wide-open eyes';
+            } else if (expr.eyeExpression === 'slightly-closed') {
+              eyeDesc = 'eyes slightly closed';
+            } else if (expr.eyeExpression === 'squinting') {
+              eyeDesc = 'squinting eyes';
+            } else {
+              eyeDesc = 'relaxed eyes';
+            }
+            
+            if (expr.eyeShape) {
+              eyeDesc += ` with ${expr.eyeShape} shape`;
+            }
+            if (expr.eyeCrinkles) {
+              eyeDesc += ' crinkled at the corners';
+            }
+            expressionParts.push(eyeDesc);
+          }
+          
+          // Eyebrow description
+          if (expr.eyebrowPosition && expr.eyebrowPosition !== 'neutral') {
+            expressionParts.push(`${expr.eyebrowPosition} eyebrows`);
+          }
+          
+          if (expressionParts.length > 0) {
+            expressionDetails = `with ${expressionParts.join(', ')}`;
+          }
+        }
+        
+        // Emotional state description
+        if (headshotAnalysis.emotionalState) {
+          const emo = headshotAnalysis.emotionalState;
+          const emotionParts = [];
+          
+          if (emo.primaryEmotion) {
+            emotionParts.push(emo.primaryEmotion);
+          }
+          if (emo.energyLevel && emo.energyLevel !== 'moderate') {
+            emotionParts.push(emo.energyLevel + ' energy');
+          }
+          if (emo.warmthLevel && emo.warmthLevel === 'warm') {
+            emotionParts.push('warm');
+          }
+          
+          if (emotionParts.length > 0) {
+            emotionalDetails = `, conveying ${emotionParts.join(', ')}`;
+          }
+        }
       }
       
-      req.body.prompt = `A premium 3D Memoji-style avatar of a ${ft}${promptEnhancement} with ${h} ${headshotAnalysis?.hairColor || ''} hair and ${skin} skin tone. Include head, shoulders, and hands with a ${g} gesture. ${clothing}. ${acc}. ${bg} Soft rounded shapes, glossy textures, minimal modern style. Cheerful happy face with warm eyes matching the reference photo.`.trim();
+      // Build the comprehensive prompt
+      const basePrompt = `A premium 3D Memoji-style avatar of a ${ft}${promptEnhancement} with ${h} ${headshotAnalysis?.hairColor || ''} hair and ${skin} skin tone.`;
+      const expressionPrompt = expressionDetails ? ` ${expressionDetails}` : '';
+      const emotionPrompt = emotionalDetails || '';
+      const matchingPrompt = headshotAnalysis ? `, using the provided reference photo to match the exact facial expression, emotion, and feel - preserving the same smile intensity, eye expression, eyebrow position, facial structure, and overall demeanor. Transform the reference photo into a premium 3D Memoji-style avatar while maintaining all facial features and expressions` : '';
+      
+      req.body.prompt = `${basePrompt}${expressionPrompt}${emotionPrompt} Include head, shoulders, and hands with a ${g} gesture. ${clothing}. ${acc}. ${bg} Soft rounded shapes, glossy textures, minimal modern style.${matchingPrompt}.`.trim();
     } catch (e) {
       console.warn('Failed to rebuild prompt from compact IDs', e);
     }
@@ -487,15 +599,32 @@ export default async function handler(req, res) {
       generationParams.quality = "high";
       generationParams.background = background || "auto";
       generationParams.output_format = "png";
+      
+      // Include headshot as reference image if available
+      if (req.body.headshot) {
+        // The headshot is already in base64 format (without data URL prefix)
+        // For gpt-image-1, we can include it as input_image
+        generationParams.input_image = req.body.headshot;
+        console.log('Including headshot as reference image for gpt-image-1');
+      }
     } else if (selectedModel === "dall-e-3") {
       generationParams.size = size || "1024x1024";
       generationParams.quality = "hd";
       generationParams.style = "vivid";
+      // Note: DALL-E 3 doesn't support reference images directly in generate endpoint
+      // The enhanced prompt with detailed analysis should help with matching
     } else if (selectedModel === "dall-e-2") {
       generationParams.size = size || "1024x1024";
+      // Note: DALL-E 2 doesn't support reference images directly in generate endpoint
+      // The enhanced prompt with detailed analysis should help with matching
     }
 
-    console.log('Generating image with model:', selectedModel, 'Parameters:', generationParams);
+    // Log parameters (excluding full base64 image for cleaner logs)
+    const logParams = { ...generationParams };
+    if (logParams.input_image) {
+      logParams.input_image = `[base64 image, ${logParams.input_image.length} chars]`;
+    }
+    console.log('Generating image with model:', selectedModel, 'Parameters:', logParams);
     
     const image = await openai.images.generate(generationParams);
 
