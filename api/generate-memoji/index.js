@@ -108,16 +108,22 @@ function checkRateLimit(ip) {
 }
 
 function validateRequestBody(body) {
-  const { prompt, size, background, model, familyType, gesture, hair, skinTone } = body;
+  const { prompt, size, background, model, familyType, gesture, hair, skinTone, headshot } = body;
 
-  // Allow either a direct prompt or compact option IDs that we will rebuild server-side
+  // Allow either a direct prompt, compact option IDs, or headshot upload
   const hasCompact = familyType || gesture || hair || skinTone || Array.isArray(body.accessories) || body.colorTheme;
-  if ((!prompt || typeof prompt !== 'string') && !hasCompact) {
-    return { valid: false, error: 'Either prompt or compact option IDs are required.' };
+  const hasHeadshot = headshot && typeof headshot === 'string' && headshot.length > 0;
+  
+  if ((!prompt || typeof prompt !== 'string') && !hasCompact && !hasHeadshot) {
+    return { valid: false, error: 'Either prompt, compact option IDs, or headshot is required.' };
   }
 
-  if (prompt.length > 1000) {
+  if (prompt && prompt.length > 1000) {
     return { valid: false, error: 'Prompt is too long (max 1000 characters).' };
+  }
+
+  if (headshot && typeof headshot === 'string' && headshot.length > 10 * 1024 * 1024) { // 10MB base64 limit
+    return { valid: false, error: 'Headshot image is too large (max 10MB).' };
   }
 
   if (size && !['1024x1024', '1024x1536', '1536x1024'].includes(size)) {
@@ -133,6 +139,124 @@ function validateRequestBody(body) {
   }
 
   return { valid: true };
+}
+
+/**
+ * Analyze headshot image using OpenAI Vision API to extract facial features
+ * @param {string} headshotBase64 - Base64 encoded image (without data URL prefix)
+ * @returns {Promise<Object>} Extracted facial features
+ */
+async function analyzeHeadshot(headshotBase64) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o", // Use GPT-4o for vision capabilities
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Analyze this headshot photo and extract the following facial features in JSON format:
+{
+  "estimatedAge": "number (e.g., 25, 35, 45)",
+  "gender": "male or female",
+  "skinTone": "light, medium-light, medium, medium-dark, or dark",
+  "hairColor": "black, brown, blonde, red, gray, or other",
+  "hairStyle": "short, long, curly, straight, wavy, bald, ponytail, bun, or other",
+  "hairLength": "short, medium, or long",
+  "facialStructure": "round, oval, square, heart, or diamond",
+  "eyeColor": "brown, blue, green, hazel, or other",
+  "hasGlasses": true or false,
+  "hasBeard": true or false,
+  "hasMustache": true or false,
+  "ethnicity": "general description if identifiable"
+}
+
+Be specific and accurate. If you cannot determine a feature, use "unknown" or a reasonable default.`
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/jpeg;base64,${headshotBase64}`
+              }
+            }
+          ]
+        }
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 500
+    });
+
+    const analysisText = response.choices[0].message.content;
+    const analysis = JSON.parse(analysisText);
+    
+    console.log('Headshot analysis result:', analysis);
+    
+    return analysis;
+  } catch (error) {
+    console.error('Error analyzing headshot:', error);
+    throw new Error(`Failed to analyze headshot: ${error.message}`);
+  }
+}
+
+/**
+ * Map analyzed features to memoji generation parameters
+ * @param {Object} analysis - Facial features from Vision API
+ * @returns {Object} Mapped parameters for memoji generation
+ */
+function mapFeaturesToMemojiParams(analysis) {
+  // Map gender and age to familyType
+  let familyType = 'father'; // default
+  if (analysis.gender === 'female') {
+    if (analysis.estimatedAge && analysis.estimatedAge < 18) {
+      familyType = 'young-daughter';
+    } else if (analysis.estimatedAge && analysis.estimatedAge > 60) {
+      familyType = 'grandmother';
+    } else {
+      familyType = 'mother';
+    }
+  } else if (analysis.gender === 'male') {
+    if (analysis.estimatedAge && analysis.estimatedAge < 18) {
+      familyType = 'young-son';
+    } else if (analysis.estimatedAge && analysis.estimatedAge > 60) {
+      familyType = 'grandfather';
+    } else {
+      familyType = 'father';
+    }
+  }
+
+  // Map skin tone
+  const skinToneMap = {
+    'light': 'light',
+    'medium-light': 'medium-light',
+    'medium': 'medium',
+    'medium-dark': 'medium-dark',
+    'dark': 'dark'
+  };
+  const skinTone = skinToneMap[analysis.skinTone?.toLowerCase()] || 'medium';
+
+  // Map hair style
+  const hairMap = {
+    'short': 'short',
+    'long': 'long',
+    'curly': 'curly',
+    'straight': 'long',
+    'wavy': 'long',
+    'bald': 'bald',
+    'ponytail': 'ponytail',
+    'bun': 'bun'
+  };
+  const hair = hairMap[analysis.hairStyle?.toLowerCase()] || analysis.hairLength?.toLowerCase() || 'short';
+
+  return {
+    familyType,
+    skinTone,
+    hair,
+    hasGlasses: analysis.hasGlasses || false,
+    hasBeard: analysis.hasBeard || false,
+    hasMustache: analysis.hasMustache || false,
+    analysis // Keep full analysis for prompt building
+  };
 }
 
 export default async function handler(req, res) {
@@ -169,7 +293,44 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: { message: 'Unauthorized' } });
   }
 
-  // If prompt not provided, rebuild from compact IDs server-side
+  // Handle headshot upload - analyze image and extract features
+  let headshotAnalysis = null;
+  let headshotParams = null;
+  
+  if (req.body.headshot) {
+    try {
+      console.log('Headshot provided, analyzing with Vision API...');
+      headshotAnalysis = await analyzeHeadshot(req.body.headshot);
+      headshotParams = mapFeaturesToMemojiParams(headshotAnalysis);
+      
+      // Override familyType and skinTone from headshot analysis
+      req.body.familyType = headshotParams.familyType;
+      req.body.skinTone = headshotParams.skinTone;
+      req.body.hair = headshotParams.hair;
+      
+      // Add glasses to accessories if detected
+      if (headshotParams.hasGlasses && (!req.body.accessories || !Array.isArray(req.body.accessories))) {
+        req.body.accessories = ['glasses'];
+      } else if (headshotParams.hasGlasses && !req.body.accessories.includes('glasses')) {
+        req.body.accessories.push('glasses');
+      }
+      
+      console.log('Headshot analysis complete:', {
+        familyType: headshotParams.familyType,
+        skinTone: headshotParams.skinTone,
+        hair: headshotParams.hair
+      });
+    } catch (error) {
+      console.error('Headshot analysis failed:', error);
+      return res.status(400).json({ 
+        error: { 
+          message: `Failed to analyze headshot: ${error.message}` 
+        } 
+      });
+    }
+  }
+
+  // If prompt not provided, rebuild from compact IDs server-side (or headshot analysis)
   if (!req.body.prompt) {
     try {
       const { familyType, gesture, hair, skinTone, accessories, colorTheme, background } = req.body || {};
@@ -180,7 +341,19 @@ export default async function handler(req, res) {
       const acc = Array.isArray(accessories) && accessories.length ? `wearing ${accessories[0]}` : '';
       const clothing = colorTheme === 'warm-pink' ? 'soft pastel sweater' : 'casual pastel shirt';
       const bg = (background === 'transparent' || colorTheme === 'transparent') ? '' : 'Pastel circular background.';
-      req.body.prompt = `A premium 3D Memoji-style avatar of a ${ft} with ${h} and ${skin} skin tone. Include head, shoulders, and hands with a ${g} gesture. ${clothing}. ${acc}. ${bg} Soft rounded shapes, glossy textures, minimal modern style. Cheerful happy face with warm eyes.`.trim();
+      
+      // Enhance prompt with headshot analysis details if available
+      let promptEnhancement = '';
+      if (headshotAnalysis) {
+        const ageDesc = headshotAnalysis.estimatedAge ? `approximately ${headshotAnalysis.estimatedAge} years old` : '';
+        const facialDesc = headshotAnalysis.facialStructure ? `with a ${headshotAnalysis.facialStructure} face shape` : '';
+        promptEnhancement = `${ageDesc} ${facialDesc}`.trim();
+        if (promptEnhancement) {
+          promptEnhancement = `, ${promptEnhancement}`;
+        }
+      }
+      
+      req.body.prompt = `A premium 3D Memoji-style avatar of a ${ft}${promptEnhancement} with ${h} ${headshotAnalysis?.hairColor || ''} hair and ${skin} skin tone. Include head, shoulders, and hands with a ${g} gesture. ${clothing}. ${acc}. ${bg} Soft rounded shapes, glossy textures, minimal modern style. Cheerful happy face with warm eyes matching the reference photo.`.trim();
     } catch (e) {
       console.warn('Failed to rebuild prompt from compact IDs', e);
     }
@@ -232,44 +405,49 @@ export default async function handler(req, res) {
   }
 
   // Check cache AFTER credit enforcement
-  try {
-    const cacheConfig = {
-      model: model || 'gpt-image-1',
-      size: size || '1024x1024',
-      familyType: req.body.familyType || 'father',
-      gesture: req.body.gesture || 'wave',
-      hair: req.body.hair || 'short',
-      skinTone: req.body.skinTone || 'medium',
-      accessories: req.body.accessories || [],
-      colorTheme: req.body.colorTheme || 'pastel-blue',
-      background: background || 'auto'
-    };
-    
-    const promptHash = generatePromptHash(cacheConfig);
-    console.log('Checking cache for hash:', promptHash);
-    
-    const cachedMemoji = await checkMemojiCache(promptHash);
-    if (cachedMemoji) {
-      console.log('Cache hit! Returning cached memoji:', cachedMemoji.id);
+  // Note: Headshot-based generations are not cached to ensure uniqueness
+  if (!req.body.headshot) {
+    try {
+      const cacheConfig = {
+        model: model || 'gpt-image-1',
+        size: size || '1024x1024',
+        familyType: req.body.familyType || 'father',
+        gesture: req.body.gesture || 'wave',
+        hair: req.body.hair || 'short',
+        skinTone: req.body.skinTone || 'medium',
+        accessories: req.body.accessories || [],
+        colorTheme: req.body.colorTheme || 'pastel-blue',
+        background: background || 'auto'
+      };
       
-      // Update usage statistics
-      await updateCacheUsage(promptHash);
+      const promptHash = generatePromptHash(cacheConfig);
+      console.log('Checking cache for hash:', promptHash);
       
-      // Return cached result (credits already consumed)
-      return res.status(200).json({
-        success: true,
-        imageUrl: cachedMemoji.image_url,
-        cached: true,
-        costSaved: cachedMemoji.generation_cost,
-        cacheId: cachedMemoji.id,
-        creditsConsumed: true // Indicate credits were consumed
-      });
+      const cachedMemoji = await checkMemojiCache(promptHash);
+      if (cachedMemoji) {
+        console.log('Cache hit! Returning cached memoji:', cachedMemoji.id);
+        
+        // Update usage statistics
+        await updateCacheUsage(promptHash);
+        
+        // Return cached result (credits already consumed)
+        return res.status(200).json({
+          success: true,
+          imageUrl: cachedMemoji.image_url,
+          cached: true,
+          costSaved: cachedMemoji.generation_cost,
+          cacheId: cachedMemoji.id,
+          creditsConsumed: true // Indicate credits were consumed
+        });
+      }
+      
+      console.log('Cache miss - proceeding with OpenAI generation');
+    } catch (cacheError) {
+      console.error('Cache check failed, proceeding with generation:', cacheError);
+      // Continue with normal generation if cache fails
     }
-    
-    console.log('Cache miss - proceeding with OpenAI generation');
-  } catch (cacheError) {
-    console.error('Cache check failed, proceeding with generation:', cacheError);
-    // Continue with normal generation if cache fails
+  } else {
+    console.log('Headshot provided - skipping cache (headshot-based generations are unique)');
   }
 
   // Credits already enforced above - proceed with generation
@@ -279,10 +457,11 @@ export default async function handler(req, res) {
   console.log('Request details:', {
     ip: clientIP,
     clientVersion: authResult.clientVersion,
-    promptLength: prompt.length,
+    promptLength: prompt?.length || 0,
     size,
     background,
     model: model || "gpt-image-1",
+    hasHeadshot: !!req.body.headshot,
     timestamp: new Date().toISOString()
   });
 
@@ -320,37 +499,41 @@ export default async function handler(req, res) {
     
     const image = await openai.images.generate(generationParams);
 
-    // Store in cache for future use
-    try {
-      const cacheConfig = {
-        model: selectedModel,
-        size: size || '1024x1024',
-        familyType: req.body.familyType || 'father',
-        gesture: req.body.gesture || 'wave',
-        hair: req.body.hair || 'short',
-        skinTone: req.body.skinTone || 'medium',
-        accessories: req.body.accessories || [],
-        colorTheme: req.body.colorTheme || 'pastel-blue',
-        background: background || 'auto'
-      };
-      
-      const promptHash = generatePromptHash(cacheConfig);
-      
-      // Upload image to Supabase Storage
-      const imageUrl = await uploadToStorage(image.data[0].b64_json, promptHash);
-      
-      // Store in cache
-      await storeInCache({
-        promptHash,
-        imageUrl,
-        config: cacheConfig,
-        cost: 0.02 // Estimated cost per generation
-      });
-      
-      console.log('Memoji cached successfully:', promptHash);
-    } catch (cacheError) {
-      console.error('Failed to cache memoji:', cacheError);
-      // Continue with response even if caching fails
+    // Store in cache for future use (skip caching for headshot-based generations)
+    if (!req.body.headshot) {
+      try {
+        const cacheConfig = {
+          model: selectedModel,
+          size: size || '1024x1024',
+          familyType: req.body.familyType || 'father',
+          gesture: req.body.gesture || 'wave',
+          hair: req.body.hair || 'short',
+          skinTone: req.body.skinTone || 'medium',
+          accessories: req.body.accessories || [],
+          colorTheme: req.body.colorTheme || 'pastel-blue',
+          background: background || 'auto'
+        };
+        
+        const promptHash = generatePromptHash(cacheConfig);
+        
+        // Upload image to Supabase Storage
+        const imageUrl = await uploadToStorage(image.data[0].b64_json, promptHash);
+        
+        // Store in cache
+        await storeInCache({
+          promptHash,
+          imageUrl,
+          config: cacheConfig,
+          cost: 0.02 // Estimated cost per generation
+        });
+        
+        console.log('Memoji cached successfully:', promptHash);
+      } catch (cacheError) {
+        console.error('Failed to cache memoji:', cacheError);
+        // Continue with response even if caching fails
+      }
+    } else {
+      console.log('Skipping cache for headshot-based generation');
     }
 
     // Add rate limit headers to successful response

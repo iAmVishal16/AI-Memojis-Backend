@@ -101,22 +101,15 @@ export async function updateCacheUsage(promptHash) {
     const supabase = getSupabase();
     
     const { data, error } = await supabase
-      .from('memoji_cache')
-      .update({
-        usage_count: supabase.raw('usage_count + 1'),
-        last_used_at: new Date().toISOString()
-      })
-      .eq('prompt_hash', promptHash)
-      .select()
-      .single();
+      .rpc('increment_memoji_usage', { hash: promptHash });
       
     if (error) {
       console.error('Error updating cache usage:', error);
       return null;
     }
     
-    console.log('Cache usage updated:', promptHash, 'New count:', data.usage_count);
-    return data;
+    console.log('Cache usage increment RPC ok for:', promptHash);
+    return data?.[0] ?? null;
   } catch (error) {
     console.error('Error in updateCacheUsage:', error);
     return null;
