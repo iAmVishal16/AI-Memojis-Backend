@@ -360,10 +360,38 @@ export default async function handler(req, res) {
     try {
       const { familyType, gesture, hair, skinTone, accessories, colorTheme, background } = req.body || {};
       const ft = (familyType || 'father');
-      const g = (gesture || 'wave').replace(/_/g, '-');
+      
+      // Map gesture to prompt description
+      const gestureMap = {
+        'wave': 'waving',
+        'thumbs-up': 'thumbs up',
+        'peace': 'peace ✌️',
+        'heart-hands': 'heart hands',
+        'pointing': 'pointing',
+        'clapping': 'clapping',
+        'ok-sign': 'OK sign'
+      };
+      const gestureValue = (gesture || 'wave').replace(/_/g, '-').toLowerCase();
+      const g = gestureMap[gestureValue] || gestureMap['wave'];
+      
       const h = (hair || 'short');
       const skin = (skinTone || 'light');
-      const acc = Array.isArray(accessories) && accessories.length ? `wearing ${accessories[0]}` : '';
+      
+      // Map accessories to prompt description
+      const accessoryMap = {
+        'none': '',
+        'glasses': 'wearing stylish glasses',
+        'sunglasses': 'wearing cool sunglasses',
+        'earrings': 'wearing elegant earrings',
+        'hat': 'wearing a stylish hat',
+        'cap': 'wearing a casual cap',
+        'headband': 'wearing a cute headband',
+        'beanie': 'wearing a cozy beanie',
+        'headphones': 'wearing stylish headphones',
+        'phone': 'holding a smartphone'
+      };
+      const accessoryValue = Array.isArray(accessories) && accessories.length ? accessories[0].toLowerCase() : 'none';
+      const acc = accessoryMap[accessoryValue] || '';
       const clothing = colorTheme === 'warm-pink' ? 'soft pastel sweater' : 'casual pastel shirt';
       const bg = (background === 'transparent' || colorTheme === 'transparent') ? '' : 'Pastel circular background.';
       
@@ -600,10 +628,14 @@ export default async function handler(req, res) {
       generationParams.background = background || "auto";
       generationParams.output_format = "png";
       
-      // Note: gpt-image-1 doesn't support reference images directly in the generate endpoint
+      // Note: After testing, images.generate() endpoint does NOT support input images directly
+      // Tried: input_images (array) - "Unknown parameter: 'input_images'"
+      // Tried: image (singular) - "Unknown parameter: 'image'"
+      // Input images appear to be supported only in images.edit() endpoint, not images.generate()
       // We rely on the enhanced prompt with detailed facial expression analysis for matching
       if (req.body.headshot) {
         console.log('Using enhanced prompt with detailed facial expression analysis for headshot matching');
+        // Future: Could potentially use images.edit() endpoint, but that requires different flow
       }
     } else if (selectedModel === "dall-e-3") {
       generationParams.size = size || "1024x1024";
